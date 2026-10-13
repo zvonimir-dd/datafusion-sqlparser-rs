@@ -1358,6 +1358,7 @@ impl Spanned for Insert {
             source,
             partitioned,
             after_columns,
+            overriding: _,        // enum, postgres specific
             has_table_keyword: _, // bool
             on,
             returning,

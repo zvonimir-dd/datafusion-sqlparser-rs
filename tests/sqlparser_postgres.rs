@@ -2265,6 +2265,70 @@ fn parse_prepare() {
 }
 
 #[test]
+fn parse_insert_overriding() {
+    for (sql, expected) in [
+        (
+            "INSERT INTO t (id, a) OVERRIDING SYSTEM VALUE VALUES (1, 'x')",
+            InsertOverriding::System,
+        ),
+        (
+            "INSERT INTO t (id, a) OVERRIDING USER VALUE VALUES (1, 'x')",
+            InsertOverriding::User,
+        ),
+        (
+            "INSERT INTO t (id, a) OVERRIDING SYSTEM VALUE SELECT id, a FROM u",
+            InsertOverriding::System,
+        ),
+        (
+            "INSERT INTO t (id) OVERRIDING USER VALUE VALUES (1) ON CONFLICT DO NOTHING RETURNING id",
+            InsertOverriding::User,
+        ),
+    ] {
+        match pg_and_generic().verified_stmt(sql) {
+            Statement::Insert(Insert { overriding, .. }) => assert_eq!(overriding, Some(expected)),
+            statement => panic!("Expected INSERT statement, got: {statement:?}"),
+        }
+    }
+
+    // Without a column list, PostgreSQL's implicit table alias must not swallow `OVERRIDING`.
+    for sql in [
+        "INSERT INTO t OVERRIDING SYSTEM VALUE VALUES (1, 'x')",
+        "INSERT INTO t OVERRIDING USER VALUE SELECT * FROM u",
+    ] {
+        match pg().verified_stmt(sql) {
+            Statement::Insert(Insert {
+                table_alias,
+                overriding,
+                ..
+            }) => {
+                assert_eq!(table_alias, None);
+                assert!(overriding.is_some());
+            }
+            statement => panic!("Expected INSERT statement, got: {statement:?}"),
+        }
+    }
+    pg().verified_stmt("INSERT INTO t AS x (id) OVERRIDING SYSTEM VALUE VALUES (1)");
+
+    // An INSERT without the clause has none.
+    match pg_and_generic().verified_stmt("INSERT INTO t (id) VALUES (1)") {
+        Statement::Insert(Insert { overriding, .. }) => assert_eq!(overriding, None),
+        statement => panic!("Expected INSERT statement, got: {statement:?}"),
+    }
+
+    // `OVERRIDING` takes `SYSTEM` or `USER`, then `VALUE`.
+    for sql in [
+        "INSERT INTO t (id) OVERRIDING VALUE VALUES (1)",
+        "INSERT INTO t (id) OVERRIDING SYSTEM VALUES (1)",
+        "INSERT INTO t (id) OVERRIDING DEFAULT VALUE VALUES (1)",
+    ] {
+        assert!(
+            pg_and_generic().parse_sql_statements(sql).is_err(),
+            "{sql} should not parse"
+        );
+    }
+}
+
+#[test]
 fn parse_pg_on_conflict() {
     let stmt = pg_and_generic().verified_stmt(
         "INSERT INTO distributors (did, dname) \
@@ -6214,6 +6278,7 @@ fn test_simple_postgres_insert_with_alias() {
             assignments: vec![],
             partitioned: None,
             after_columns: vec![],
+            overriding: None,
             has_table_keyword: false,
             on: None,
             returning: None,
@@ -6295,6 +6360,7 @@ fn test_simple_insert_with_quoted_alias() {
             assignments: vec![],
             partitioned: None,
             after_columns: vec![],
+            overriding: None,
             has_table_keyword: false,
             on: None,
             returning: None,
